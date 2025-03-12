@@ -36,7 +36,6 @@ var (
 	mutex          sync.RWMutex
 	logger         *zap.SugaredLogger
 
-	// Prometheus metrics
 	containerMappingMetric = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "dcgm_container_mapping",
@@ -45,7 +44,6 @@ var (
 		[]string{"gpu", "modelName", "UUID", "container", "process"},
 	)
 
-	// Create a prometheus registry
 	registry = prometheus.NewRegistry()
 )
 
@@ -87,26 +85,28 @@ func initLogger(level string) {
 
 // DCGMMetric represents a single metric from DCGM exporter
 type DCGMMetric struct {
+	// Labels is a key-value map of the metric's labels (e.g., "UUID", "name")
 	Labels    map[string]string `json:"labels"`
 	Value     float64           `json:"value"`
 	Timestamp int64             `json:"timestamp"`
 }
 
-// GPUInfo represents static information about a GPU device
+// GPUInfo contains GPU details retrieved at startup (index, UUID, model name).
 type GPUInfo struct {
-	Index string // GPU index from nvidia-smi
+	// Index is the numeric index from nvidia-smi (e.g., "0", "1").
+	Index string
 	UUID  string
-	Name  string // Model name
+	Name  string // GPU model name (e.g. "Tesla V100")
 }
 
-// GPUProcess represents a process running on a GPU
+// GPUProcess describes a process on a GPU, including PID and process name.
 type GPUProcess struct {
 	GPUUUID     string
 	PID         string
 	ProcessName string
 }
 
-// ContainerMapping represents the mapping between a GPU and its container
+// ContainerMapping links a GPU to an associated Docker container.
 type ContainerMapping struct {
 	ContainerID   string
 	ContainerName string
@@ -209,7 +209,7 @@ func getContainerIDFromPID(pid string) (string, error) {
 	content = bytes.TrimSpace(content)
 	logger.Debugf("Cgroup content: %s", string(content))
 
-	// Match the exact format: "0::/system.slice/docker-<container_id>.scope"
+	// Matches cgroup path like "0::/system.slice/docker-<64-character-hex>.scope"
 	re := regexp.MustCompile(`^0::/system\.slice/docker-([a-f0-9]{64})\.scope$`)
 	matches := re.FindStringSubmatch(string(content))
 
@@ -313,10 +313,11 @@ func updateGPUInfo(ctx context.Context) {
 }
 
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
-	logger.Debugf("Received request for /metrics from %s", r.RemoteAddr)
+	// The primary handler for our /metrics endpoint.
+	logger.Debugf("Request for /metrics from %s", r.RemoteAddr)
 
 	if reexportDCGM {
-		// Get and process DCGM metrics
+		// We fetch raw DCGM metrics, then append our container labels before serving them back out.
 		metricFamilies, err := getDCGMMetrics()
 		if err != nil {
 			logger.Errorf("Error getting DCGM metrics: %v", err)
@@ -384,12 +385,8 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 
 	logger.Debugf("Found %d GPU processes", len(localProcesses))
 
-	// Reset the metric to remove old values
-	containerMappingMetric.Reset()
-
-	// Set new values for all GPUs
+	// Create metrics for each GPU: one base metric for the GPU itself and additional metrics for any running processes
 	for uuid, gpu := range gpuInfo {
-		// First create a metric for the GPU itself with no process/container
 		containerMappingMetric.With(prometheus.Labels{
 			"gpu":       gpu.Index,
 			"modelName": gpu.Name,
@@ -398,7 +395,6 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 			"process":   "",
 		}).Set(0)
 
-		// Then add metrics for any processes running on this GPU
 		for _, process := range localProcesses {
 			if process.GPUUUID == uuid {
 				containerName := ""
