@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"go.uber.org/zap"
@@ -34,7 +35,24 @@ var (
 	processes      []GPUProcess
 	mutex          sync.RWMutex
 	logger         *zap.SugaredLogger
+
+	// Prometheus metrics
+	containerMappingMetric = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "dcgm_container_mapping",
+			Help: "Mapping between GPU ID and container and process name",
+		},
+		[]string{"gpu", "modelName", "UUID", "container", "process"},
+	)
+
+	// Create a prometheus registry
+	registry = prometheus.NewRegistry()
 )
+
+func init() {
+	// Register the metric with our registry instead of the default one
+	registry.MustRegister(containerMappingMetric)
+}
 
 // initLogger initializes the zap logger with the specified level
 func initLogger(level string) {
@@ -366,27 +384,56 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 
 	logger.Debugf("Found %d GPU processes", len(localProcesses))
 
-	// Write metric descriptions
-	fmt.Fprintln(w, "# HELP dcgm_container_mapping Mapping between GPU ID and container and process name")
-	fmt.Fprintln(w, "# TYPE dcgm_container_mapping gauge")
+	// Reset the metric to remove old values
+	containerMappingMetric.Reset()
 
-	// Write metric values
-	for _, process := range localProcesses {
-		logger.Debugf("Processing GPU %s", process.GPUUUID)
+	// Set new values for all GPUs
+	for uuid, gpu := range gpuInfo {
+		// First create a metric for the GPU itself with no process/container
+		containerMappingMetric.With(prometheus.Labels{
+			"gpu":       gpu.Index,
+			"modelName": gpu.Name,
+			"UUID":      uuid,
+			"container": "",
+			"process":   "",
+		}).Set(0)
 
-		if containerInfo, ok := localActiveGPUs[process.GPUUUID]; ok {
-			metric := fmt.Sprintf("dcgm_container_mapping{gpu=\"%s\",modelName=\"%s\",UUID=\"%s\",container=\"%s\",process=\"%s\"} %d %d",
-				containerInfo.GPUIndex,
-				containerInfo.GPUName,
-				process.GPUUUID,
-				containerInfo.ContainerName,
-				process.ProcessName,
-				0,
-				time.Now().UnixNano()/1e6)
-			logger.Debugf("Writing metric: %s", metric)
-			fmt.Fprintln(w, metric)
+		// Then add metrics for any processes running on this GPU
+		for _, process := range localProcesses {
+			if process.GPUUUID == uuid {
+				containerName := ""
+				if containerInfo, ok := localActiveGPUs[uuid]; ok {
+					containerName = containerInfo.ContainerName
+				}
+				containerMappingMetric.With(prometheus.Labels{
+					"gpu":       gpu.Index,
+					"modelName": gpu.Name,
+					"UUID":      uuid,
+					"container": containerName,
+					"process":   process.ProcessName,
+				}).Set(0)
+			}
 		}
 	}
+
+	metricFamilies, err := registry.Gather()
+	if err != nil {
+		logger.Errorf("Error gathering metrics: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to gather metrics: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	contentType := expfmt.Negotiate(r.Header)
+	encoder := expfmt.NewEncoder(w, contentType)
+
+	for _, mf := range metricFamilies {
+		if err := encoder.Encode(mf); err != nil {
+			logger.Errorf("Error encoding metric family: %v", err)
+			http.Error(w, fmt.Sprintf("Failed to encode metrics: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	logger.Debug("Finished writing metrics")
 }
 
@@ -421,6 +468,7 @@ func main() {
 	defer cancel()
 	go updateGPUInfo(ctx)
 
+	// Register metrics handler
 	http.HandleFunc("/metrics", metricsHandler)
 
 	logger.Infof("Starting metrics server on %s", port)
