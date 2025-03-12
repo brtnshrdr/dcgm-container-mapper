@@ -20,21 +20,21 @@ jobs:
 
       - name: Build AMD64 Binary
         run: |
-          GOOS=linux GOARCH=amd64 go build -o gpu-metrics-exporter-linux-amd64 main.go
-          chmod +x gpu-metrics-exporter-linux-amd64
+          GOOS=linux GOARCH=amd64 go build -o dist/dcgm-container-mapper-linux-amd64 main.go
+          chmod +x dist/dcgm-container-mapper-linux-amd64
 
       - name: Build ARM64 Binary
         run: |
-          GOOS=linux GOARCH=arm64 go build -o gpu-metrics-exporter-linux-arm64 main.go
-          chmod +x gpu-metrics-exporter-linux-arm64
+          GOOS=linux GOARCH=arm64 go build -o dist/dcgm-container-mapper-linux-arm64 main.go
+          chmod +x dist/dcgm-container-mapper-linux-arm64
 
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            gpu-metrics-exporter-linux-amd64
-            gpu-metrics-exporter-linux-arm64
+            dist/dcgm-container-mapper-linux-amd64
+            dist/dcgm-container-mapper-linux-arm64
           draft: false
           prerelease: false
           generate_release_notes: true 

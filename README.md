@@ -28,12 +28,12 @@ You can download pre-built binaries for Linux (AMD64 and ARM64) from the [releas
 ```bash
 # Download the latest release for your architecture
 # For AMD64:
-curl -L -o gpu-metrics-exporter "https://github.com/brtnshrdr/dcgm-container-mapper/releases/latest/download/gpu-metrics-exporter-linux-amd64"
+curl -L -o dcgm-container-mapper "https://github.com/brtnshrdr/dcgm-container-mapper/releases/latest/download/dcgm-container-mapper-linux-amd64"
 # For ARM64:
-curl -L -o gpu-metrics-exporter "https://github.com/brtnshrdr/dcgm-container-mapper/releases/latest/download/gpu-metrics-exporter-linux-arm64"
+curl -L -o dcgm-container-mapper "https://github.com/brtnshrdr/dcgm-container-mapper/releases/latest/download/dcgm-container-mapper-linux-arm64"
 
 # Make it executable
-chmod +x gpu-metrics-exporter
+chmod +x dcgm-container-mapper-linux-amd64
 ```
 
 ### Building from Source
@@ -46,10 +46,8 @@ cd dcgm-container-mapper
 # Install dependencies
 go mod tidy
 
-# Build the binary
-go build -o gpu-metrics-exporter main.go
-# On MacOS, use the following command to build for Linux
-GOOS=linux GOARCH=amd64 go build -o gpu-metrics-exporter main.go
+# Build the binaries
+./build.sh
 ```
 
 ## Usage
@@ -57,7 +55,7 @@ GOOS=linux GOARCH=amd64 go build -o gpu-metrics-exporter main.go
 The most common usage is with DCGM re-export enabled:
 
 ```bash
-./gpu-metrics-exporter --reexport-dcgm --dcgm-port 9400
+./dcgm-container-mapper --reexport-dcgm --dcgm-port 9400
 ```
 
 This mode is recommended because:
@@ -92,20 +90,20 @@ This enriches the standard DCGM metrics with container information, making it ea
 ### Basic Mode (Limited)
 Without `--reexport-dcgm`, only basic GPU-to-container mapping is provided:
 ```
-# HELP gpu_container_mapping Mapping between GPU ID and container and process name
-# TYPE gpu_container_mapping gauge
+# HELP dcgm_container_mapping Mapping between GPU ID and container and process name
+# TYPE dcgm_container_mapping gauge
 ```
 
 Metric format:
 ```
-gpu_container_mapping{gpu="0",modelName="Tesla V100",UUID="GPU-xxx",container="container_name",process="process_name"} 0
+dcgm_container_mapping{gpu="0",modelName="Tesla V100",UUID="GPU-xxx",container="container_name",process="process_name"} 0
 ```
 
 ## Example
 
 1. Start the exporter:
 ```bash
-./gpu-metrics-exporter --port 9100 --log-level debug
+./dcgm-container-mapper --port 9100 --log-level debug
 ```
 
 2. Access metrics:
@@ -121,15 +119,7 @@ Add the following to your `prometheus.yml`:
 
 ```yaml
 scrape_configs:
-  - job_name: 'gpu-metrics'
+  - job_name: 'dcgm-container-mapper'
     static_configs:
       - targets: ['localhost:9100']
-```
-
-## Development
-
-### Building from Source
-
-```bash
-go build -o gpu-metrics-exporter main.go
 ```

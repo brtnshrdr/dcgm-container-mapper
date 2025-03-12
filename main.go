@@ -367,15 +367,15 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	logger.Debugf("Found %d GPU processes", len(localProcesses))
 
 	// Write metric descriptions
-	fmt.Fprintln(w, "# HELP gpu_container_mapping Mapping between GPU ID and container and process name")
-	fmt.Fprintln(w, "# TYPE gpu_container_mapping gauge")
+	fmt.Fprintln(w, "# HELP dcgm_container_mapping Mapping between GPU ID and container and process name")
+	fmt.Fprintln(w, "# TYPE dcgm_container_mapping gauge")
 
 	// Write metric values
 	for _, process := range localProcesses {
 		logger.Debugf("Processing GPU %s", process.GPUUUID)
 
 		if containerInfo, ok := localActiveGPUs[process.GPUUUID]; ok {
-			metric := fmt.Sprintf("gpu_container_mapping{gpu=\"%s\",modelName=\"%s\",UUID=\"%s\",container=\"%s\",process=\"%s\"} %d %d",
+			metric := fmt.Sprintf("dcgm_container_mapping{gpu=\"%s\",modelName=\"%s\",UUID=\"%s\",container=\"%s\",process=\"%s\"} %d %d",
 				containerInfo.GPUIndex,
 				containerInfo.GPUName,
 				process.GPUUUID,
