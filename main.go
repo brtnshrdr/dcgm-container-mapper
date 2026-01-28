@@ -18,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/protobuf/proto"
@@ -51,7 +52,9 @@ var (
 )
 
 func init() {
-	// Register the metric with our registry instead of the default one
+	// Required for prometheus/common v0.67+ to parse metrics
+	model.NameValidationScheme = model.LegacyValidation
+
 	registry.MustRegister(containerMappingMetric)
 }
 
