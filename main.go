@@ -24,17 +24,20 @@ import (
 )
 
 var (
-	logLevel       string
-	reexportDCGM   bool
-	dcgmPort       string
-	port           string
-	listenAddress  string
-	updateInterval time.Duration
-	gpuInfo        map[string]*GPUInfo // Static GPU information, initialized once at startup (UUID -> GPU details)
-	activeGPUs     map[string]*ContainerMapping
-	processes      []GPUProcess
-	mutex          sync.RWMutex
-	logger         *zap.SugaredLogger
+	logLevel              string
+	reexportDCGM          bool
+	dcgmPort              string
+	port                  string
+	listenAddress         string
+	updateInterval        time.Duration
+	maxConsecutiveErrors  int
+	gpuInfo               map[string]*GPUInfo // Static GPU information, initialized once at startup (UUID -> GPU details)
+	activeGPUs            map[string]*ContainerMapping
+	processes             []GPUProcess
+	mutex                 sync.RWMutex
+	logger                *zap.SugaredLogger
+	lastSuccessfulUpdate  time.Time
+	consecutiveErrors     int
 
 	containerMappingMetric = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -298,13 +301,25 @@ func updateGPUInfo(ctx context.Context) {
 		case <-ticker.C:
 			newActiveGPUs, newProcesses, err := getGPUProcessContainerMapping()
 			if err != nil {
-				logger.Errorf("Error updating GPU information: %v", err)
+				mutex.Lock()
+				consecutiveErrors++
+				currentErrors := consecutiveErrors
+				mutex.Unlock()
+
+				logger.Errorf("Error updating GPU information (%d/%d consecutive failures): %v",
+					currentErrors, maxConsecutiveErrors, err)
+
+				if currentErrors >= maxConsecutiveErrors {
+					logger.Fatalf("Too many consecutive errors (%d), exiting", currentErrors)
+				}
 				continue
 			}
 
 			mutex.Lock()
 			activeGPUs = newActiveGPUs
 			processes = newProcesses
+			consecutiveErrors = 0
+			lastSuccessfulUpdate = time.Now()
 			mutex.Unlock()
 
 			logger.Debugf("Updated GPU information: %d active GPUs, %d processes", len(activeGPUs), len(processes))
@@ -370,8 +385,8 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 
 			// Encode the metric family
 			if err := encoder.Encode(mf); err != nil {
+				// Can't send HTTP error after response has started; just log and return
 				logger.Errorf("Error encoding metric family: %v", err)
-				http.Error(w, fmt.Sprintf("Failed to encode metrics: %v", err), http.StatusInternalServerError)
 				return
 			}
 		}
@@ -424,13 +439,40 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 
 	for _, mf := range metricFamilies {
 		if err := encoder.Encode(mf); err != nil {
+			// Can't send HTTP error after response has started; just log and return
 			logger.Errorf("Error encoding metric family: %v", err)
-			http.Error(w, fmt.Sprintf("Failed to encode metrics: %v", err), http.StatusInternalServerError)
 			return
 		}
 	}
 
 	logger.Debug("Finished writing metrics")
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	mutex.RLock()
+	lastUpdate := lastSuccessfulUpdate
+	errors := consecutiveErrors
+	mutex.RUnlock()
+
+	// Check if we've had a successful update recently (within 3x the update interval)
+	staleThreshold := 3 * updateInterval
+	timeSinceUpdate := time.Since(lastUpdate)
+
+	if errors > 0 {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprintf(w, "unhealthy: %d consecutive errors\n", errors)
+		return
+	}
+
+	if timeSinceUpdate > staleThreshold {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprintf(w, "unhealthy: last successful update was %v ago (threshold: %v)\n",
+			timeSinceUpdate.Round(time.Second), staleThreshold)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "healthy: last update %v ago\n", timeSinceUpdate.Round(time.Second))
 }
 
 func main() {
@@ -441,6 +483,7 @@ func main() {
 	flag.StringVar(&port, "port", "9100", "Port to listen on (default: 9100)")
 	flag.StringVar(&listenAddress, "listen-address", "localhost", "Address to listen on (default: localhost)")
 	flag.DurationVar(&updateInterval, "update-interval", 5*time.Second, "Interval to update GPU information (default: 5s)")
+	flag.IntVar(&maxConsecutiveErrors, "max-consecutive-errors", 5, "Exit after this many consecutive update failures (default: 5)")
 	flag.Parse()
 
 	// Initialize logger
@@ -458,18 +501,21 @@ func main() {
 	if err != nil {
 		logger.Fatalf("Failed to initialize GPU process mapping: %v", err)
 	}
+	lastSuccessfulUpdate = time.Now()
 
 	// Start background GPU information update
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go updateGPUInfo(ctx)
 
-	// Register metrics handler
 	http.HandleFunc("/metrics", metricsHandler)
+	http.HandleFunc("/health", healthHandler)
 
 	logger.Infof("Starting metrics server on %s", port)
 	logger.Infof("Metrics available at http://%s:%s/metrics", listenAddress, port)
+	logger.Infof("Health check available at http://%s:%s/health", listenAddress, port)
 	logger.Infof("Updating GPU information every %v", updateInterval)
+	logger.Infof("Will exit after %d consecutive update failures", maxConsecutiveErrors)
 	if reexportDCGM {
 		logger.Infof("Re-exporting DCGM metrics from port %s", dcgmPort)
 	}
