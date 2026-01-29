@@ -52,9 +52,6 @@ var (
 )
 
 func init() {
-	// Required for prometheus/common v0.67+ to parse metrics
-	model.NameValidationScheme = model.LegacyValidation
-
 	registry.MustRegister(containerMappingMetric)
 }
 
@@ -251,7 +248,7 @@ func getDCGMMetrics() (map[string]*dto.MetricFamily, error) {
 	}
 	defer resp.Body.Close()
 
-	var parser expfmt.TextParser
+	parser := expfmt.NewTextParser(model.LegacyValidation)
 	metricFamilies, err := parser.TextToMetricFamilies(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse metrics: %v", err)
